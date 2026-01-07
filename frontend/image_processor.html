@@ -145,7 +145,7 @@
 
         async function initWasm() {
             try {
-                const response = await fetch(`photo_runtime.wasm?t=${Date.now()}`);
+                const response = await fetch(`wasm_runtime.wasm?t=${Date.now()}`);
                 const bytes = await response.arrayBuffer();
                 const { instance } = await WebAssembly.instantiate(bytes, importObject);
                 wasmInstance = instance;
