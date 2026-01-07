@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Wasm Host - Original Size</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; padding: 20px; }
+        .log-container { background: #000; border: 1px solid #333; padding: 15px; height: 300px; overflow-y: auto; border-radius: 8px; font-family: 'Cascadia Code', monospace; font-size: 13px; }
+        .host { color: #9cdcfe; }
+        .wasm { color: #4ec9b0; }
+        .success { color: #b5cea8; font-weight: bold; }
+        .error { color: #f44747; font-weight: bold; }
+        .controls { margin-bottom: 20px; background: #1e1e1e; padding: 15px; border-radius: 8px; }
+        canvas { border: 1px solid #555; margin-top: 10px; background: #000; display: block; max-width: 100%; }
+        input[type="file"], select { background: #333; color: white; padding: 10px; border-radius: 4px; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Wasm Image Filter - Original Resolution</h1>
+    
+    <div class="controls">
+        <label for="upload">Select original image: </label>
+        <input type="file" id="upload" accept="image/*">
+        
+        <label for="filterSelect" style="margin-left: 20px;">Select filter: </label>
+        <select id="filterSelect">
+            <option value="0">Grayscale</option>
+            <option value="1">Invert</option>
+            <option value="2">Sepia</option>
+        </select>
+    </div>
+
+    <canvas id="display"></canvas>
+    <div id="console" class="log-container"></div>
+
+    <script>
+        const terminal = document.getElementById("console");
+        const log = (msg, cls = "") => {
+            const div = document.createElement("div");
+            div.className = cls;
+            div.innerHTML = `&gt; ${msg}`;
+            terminal.appendChild(div);
+            terminal.scrollTop = terminal.scrollHeight;
+        };
+
+        const memory = new WebAssembly.Memory({ initial: 200, maximum: 4000 });
+
+        class PictureEncoder {
+            constructor() { this.buffer = []; }
+            u32(val) {
+                const b = new ArrayBuffer(4);
+                new DataView(b).setUint32(0, val, true);
+                this.buffer.push(...new Uint8Array(b));
+            }
+            getUint8Array() { return new Uint8Array(this.buffer); }
+        }
+
+        let currentImageData = null;
+        let originalPixelData = null;
+        let wasmInstance = null;
+
+        const importObject = {
+            env: {
+                memory: memory,
+                console_log: (offset, length) => {
+                    const bytes = new Uint8Array(memory.buffer, offset, length);
+                    log(`[WASM]: ${new TextDecoder().decode(bytes)}`, "wasm");
+                },
+                get_input: (offset, lenPtr) => {
+                    if (!currentImageData) return;
+                    const { width, height, pointer } = currentImageData;
+
+                    const encoder = new PictureEncoder();
+                    encoder.u32(width);
+                    encoder.u32(height);
+                    encoder.u32(pointer); 
+                    
+                    const encodedMetadata = encoder.getUint8Array();
+                    const view = new DataView(memory.buffer);
+
+                    const metaBuf = new Uint8Array(memory.buffer, offset, encodedMetadata.length);
+                    metaBuf.set(encodedMetadata);
+                    view.setUint32(lenPtr, encodedMetadata.length, true);
+
+                    const wasmPixelBuf = new Uint8Array(memory.buffer, pointer, originalPixelData.length);
+                    wasmPixelBuf.set(originalPixelData);
+                }
+            }
+        };
+
+        function applyFilter() {
+            if (!currentImageData || !wasmInstance) return;
+
+            const canvas = document.getElementById('display');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            const filterType = parseInt(document.getElementById('filterSelect').value);
+            const { width, height, pointer } = currentImageData;
+
+            try {
+                log(`Applying filter ID: ${filterType} to ${width}x${height}`, "host");
+                const result = wasmInstance.exports.call(512, filterType); 
+
+                if (result === 0) {
+                    const totalBytes = width * height * 4;
+                    const filteredPixels = new Uint8ClampedArray(memory.buffer, pointer, totalBytes);
+                    const newImageData = new ImageData(filteredPixels, width, height);
+                    ctx.putImageData(newImageData, 0, 0);
+                    log("Filter applied.", "success");
+                }
+            } catch (err) {
+                log(`Error: ${err.message}`, "error");
+            }
+        }
+
+        async function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file || !wasmInstance) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.getElementById('display');
+                    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                    
+                    const w = img.width;
+                    const h = img.height;
+                    
+                    canvas.width = w;
+                    canvas.height = h;
+                    ctx.drawImage(img, 0, 0, w, h);
+                    
+                    const imageData = ctx.getImageData(0, 0, w, h);
+                    originalPixelData = new Uint8Array(imageData.data);
+
+                    const pointer = wasmInstance.exports.alloc_pixel_buffer(w, h);
+                    currentImageData = { width: w, height: h, pointer: pointer };
+
+                    applyFilter();
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function initWasm() {
+            try {
+                const response = await fetch(`photo_runtime.wasm?t=${Date.now()}`);
+                const bytes = await response.arrayBuffer();
+                const { instance } = await WebAssembly.instantiate(bytes, importObject);
+                wasmInstance = instance;
+                log("WASM loaded ready.", "success");
+            } catch (err) {
+                log(`Error: ${err.message}`, "error");
+            }
+        }
+
+        document.getElementById('upload').addEventListener('change', handleImageUpload);
+        document.getElementById('filterSelect').addEventListener('change', applyFilter);
+        initWasm();
+    </script>
+</body>
+</html>

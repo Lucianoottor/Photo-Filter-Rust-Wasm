@@ -1,0 +1,16 @@
+[package]
+name = "wasm-types"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+parity-scale-codec = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+unicode-segmentation = { version = "1.12.0" }
+
+[features]
+default = ["std"]
+std = ["parity-scale-codec/std"]
